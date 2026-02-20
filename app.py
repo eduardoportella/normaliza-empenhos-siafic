@@ -727,7 +727,7 @@ st.set_page_config(page_title="Consolidador Empenhos SIAFIC", layout="wide")
 st.title("Consolidador Empenhos SIAFIC → Relatório Consolidado")
 
 st.write("1) Informe o **Número de Protocolo / Número do GMS / Número do Contrato / Valor do Contrato**.")
-st.write("2) Anexe o **relatório do SIAFIC**.")
+st.write("2) Anexe o **relatório do SIAFIC** - TIPO 8323.")
 st.write("3) Baixe o consolidado.")
 st.write("4) Seja Feliz :)")
 
