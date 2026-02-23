@@ -830,7 +830,8 @@ if uploaded:
             now = datetime.now().strftime("%Y%m%d_%H%M%S")
             st.success("Consolidado gerado com sucesso.")
             st.download_button(
-                "Baixar XLSX consolidado",
+                "Baixar planilha consolidada",
+                icon=":material/download:",
                 data=xlsx_bytes,
                 file_name=f"REL_CONSOLIDADO_{now}.xlsx",
                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
