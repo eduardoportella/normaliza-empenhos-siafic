@@ -738,9 +738,9 @@ Em seguida, realiza o agrupamento por protocolo para encontrar as respectivas
 correspondências no documento.
 """)
 
+st.subheader("Entrada: Protocolos")
 st.caption("Dica: você pode copiar e colar")
 
-st.subheader("Entrada: Protocolos")
 default_input = pd.DataFrame(
     [
         {"Protocolo": "", "GMS": "", "Contrato": "", "Valor do Contrato": ""},
