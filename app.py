@@ -394,9 +394,6 @@ def build_consolidated(
 
         item = {"emp": emp, "data": dt, "valor": valor}
 
-
-        print("\033[91m", fonte, "\033[0m", sep="")
-
         if fonte == FONT_ESTADUAL:
             grouped[prot]["estadual"].append(item)
         elif fonte == FONT_FEDERAL:
