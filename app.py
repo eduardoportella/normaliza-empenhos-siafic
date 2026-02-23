@@ -731,6 +731,15 @@ st.write("2) Anexe o **relatório do SIAFIC** - TIPO 8323.")
 st.write("3) Baixe o consolidado.")
 st.write("4) Seja Feliz :)")
 
+expand = st.expander("Como Funciona?", icon=":material/info:")
+expand.write("""
+O código processa o relatório do SIAFIC e identifica os protocolos fornecidos. 
+Em seguida, realiza o agrupamento por protocolo para encontrar as respectivas 
+correspondências no documento.
+""")
+
+st.caption("Dica: você pode copiar e colar")
+
 st.subheader("Entrada: Protocolos")
 default_input = pd.DataFrame(
     [
@@ -746,7 +755,6 @@ prot_df = st.data_editor(
 st.subheader("Upload: Relatório SIAFIC (XLSX ou CSV)")
 uploaded = st.file_uploader("Selecione o arquivo", type=["xlsx", "xls", "csv"])
 
-st.caption("Feito por Eduardo Portella")
 
 if uploaded:
     try:
