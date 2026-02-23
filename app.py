@@ -286,7 +286,7 @@ def guess_columns(df: pd.DataFrame) -> Dict[str, str]:
         "fonte": find_fonte_col(),
         "empenho": find_any(["nota de empenho"]),
         "data": find_any(["data da emissão do empenho"]),
-        "valor": find_any(["saldo a pagar"]),
+        "valor": find_any(["despesas pagas"]),
         "cnpj": find_any(["cnpj", "cpf", "código credor", "cod credor"]),
         "credor": find_any(["descrição credor"]),
     }
