@@ -139,6 +139,20 @@ FONT_FEDERAL = 552
 MONEY_FMT = '"R$" #,##0.00'
 DATE_FMT = 'dd/mm/yyyy'
 
+def _coerce_cell_to_text(value) -> str:
+    """
+    Normaliza qualquer valor de célula para texto seguro.
+    Evita falhas quando a planilha mistura strings, floats, None e NaN.
+    """
+    if value is None:
+        return ""
+    try:
+        if pd.isna(value):
+            return ""
+    except TypeError:
+        pass
+    return str(value).strip()
+
 def clean_siafic_table(df_raw: pd.DataFrame, start_row: int = 3) -> pd.DataFrame:
     """
     - Remove as 3 primeiras linhas (start_row=3 => começa na linha 4 do Excel)
@@ -162,7 +176,7 @@ def clean_siafic_table(df_raw: pd.DataFrame, start_row: int = 3) -> pd.DataFrame
         if len(df_raw) <= start_row:
             return pd.DataFrame()
 
-        header = df_raw.iloc[start_row].astype(str).str.strip().tolist()
+        header = [_coerce_cell_to_text(v) for v in df_raw.iloc[start_row].tolist()]
         df = df_raw.iloc[start_row + 1:].copy()
         df.columns = header
         df = df.reset_index(drop=True)
@@ -182,11 +196,9 @@ def clean_siafic_table(df_raw: pd.DataFrame, start_row: int = 3) -> pd.DataFrame
     ]
 
     stop_idx = None
-    # transforma em strings para varrer com segurança
-    df_str = df.astype(str)
-
-    for i in range(len(df_str)):
-        row_text = " | ".join(df_str.iloc[i].tolist()).lower()
+    for i in range(len(df)):
+        row_values = [_coerce_cell_to_text(v) for v in df.iloc[i].tolist()]
+        row_text = " | ".join(row_values).lower()
         if any(re.search(p, row_text, flags=re.IGNORECASE) for p in marker_patterns):
             stop_idx = i
             break
