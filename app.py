@@ -798,7 +798,16 @@ if uploaded:
         # -------------------------
         # 4) Geração do consolidado
         # -------------------------
-        if ok and st.button("Gerar planilha consolidada", type="primary"):
+        submit_clicked = st.button("Submit", type="primary")
+        if not ok:
+            missing_labels = ", ".join(missing)
+            st.warning(f"Mapeamento incompleto no relatório SIAFIC. Colunas não identificadas: {missing_labels}")
+
+        if submit_clicked:
+            if not ok:
+                st.error("Não foi possível gerar o consolidado porque faltam colunas obrigatórias no arquivo SIAFIC.")
+                st.stop()
+
             prot_df2 = prot_df.copy()
 
             if "Valor do Contrato" in prot_df2.columns:
