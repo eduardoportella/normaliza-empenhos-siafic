@@ -298,7 +298,7 @@ def guess_columns(df: pd.DataFrame) -> Dict[str, str]:
         "fonte": find_fonte_col(),
         "empenho": find_any(["nota de empenho"]),
         "data": find_any(["data da emissão do empenho"]),
-        "valor": find_any(["despesas pagas"]),
+        "valor": find_any(["Saldo à Liquidar"]),
         "cnpj": find_any(["cnpj", "cpf", "código credor", "cod credor"]),
         "credor": find_any(["descrição credor"]),
     }
@@ -314,7 +314,7 @@ def guess_columns(df: pd.DataFrame) -> Dict[str, str]:
             "protocolo": 30,
             "cnpj": 31,
             "credor": 32,
-            "valor": 37,
+            "valor": 39,
         }
         for k, idx in idx_map.items():
             if mapping.get(k) is None and len(df.columns) > idx:
