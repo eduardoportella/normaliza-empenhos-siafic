@@ -733,12 +733,27 @@ def write_excel_formatted(df_out: pd.DataFrame, max_est: int, max_fed: int) -> b
 # UI
 # -----------------------------
 st.set_page_config(page_title="Consolidador Empenhos SIAFIC", layout="wide")
+st.markdown(
+    """
+    <style>
+    .stDownloadButton > button {
+        min-height: 3.5rem;
+        font-size: 1.1rem;
+        font-weight: 700;
+        width: 100%;
+    }
+    </style>
+    """,
+    unsafe_allow_html=True,
+)
 st.title("Consolidador Empenhos SIAFIC → Relatório Consolidado")
 
 st.write("1) Informe o **Número de Protocolo / Número do GMS / Número do Contrato / Valor do Contrato**.")
 st.write("2) Anexe o **relatório do SIAFIC** - TIPO 8323.")
 st.write("3) Baixe o consolidado.")
 st.write("4) Seja Feliz :)")
+
+st.caption("⚠️ Para esse fluxo, use o relatório do SIAFIC do tipo 8323.")
 
 expand = st.expander("Como Funciona?", icon=":material/info:")
 expand.write("""
@@ -810,7 +825,7 @@ if uploaded:
         # -------------------------
         # 4) Geração do consolidado
         # -------------------------
-        submit_clicked = st.button("Submit", type="primary")
+        submit_clicked = st.button("Consolidar Informações", type="primary")
         if not ok:
             missing_labels = ", ".join(missing)
             st.warning(f"Mapeamento incompleto no relatório SIAFIC. Colunas não identificadas: {missing_labels}")
@@ -847,16 +862,16 @@ if uploaded:
 
             now = datetime.now().strftime("%Y%m%d_%H%M%S")
             st.success("Consolidado gerado com sucesso.")
-            st.download_button(
-                "Baixar planilha consolidada",
-                icon=":material/download:",
-                data=xlsx_bytes,
-                file_name=f"REL_CONSOLIDADO_{now}.xlsx",
-                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-            )
-
-            st.subheader("Prévia (primeiras linhas)")
-            st.dataframe(df_out.head(50), use_container_width=True)
+            _, center_col, _ = st.columns([1, 2, 1])
+            with center_col:
+                st.download_button(
+                    "Baixar planilha consolidada",
+                    icon=":material/download:",
+                    data=xlsx_bytes,
+                    file_name=f"REL_CONSOLIDADO_{now}.xlsx",
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    use_container_width=True,
+                )
 
     except Exception as e:
         st.exception(e)
