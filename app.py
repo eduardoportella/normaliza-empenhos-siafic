@@ -1,5 +1,6 @@
 import io
 import re
+import unicodedata
 from datetime import datetime
 from typing import Dict, List, Optional, Tuple
 
@@ -139,6 +140,14 @@ FONT_FEDERAL = 552
 MONEY_FMT = '"R$" #,##0.00'
 DATE_FMT = 'dd/mm/yyyy'
 
+FINANCIAL_METRICS = [
+    ("despesas_empenhadas", "DESPESAS EMPENHADAS", "DESP_EMP"),
+    ("despesas_liquidadas", "DESPESAS LIQUIDADAS", "DESP_LIQ"),
+    ("saldo_liquidar", "SALDO À LIQUIDAR", "SALDO_LIQ"),
+    ("despesas_pagas", "DESPESAS PAGAS", "DESP_PAG"),
+    ("saldo_pagar", "SALDO À PAGAR", "SALDO_PAG"),
+]
+
 def _coerce_cell_to_text(value) -> str:
     """
     Normaliza qualquer valor de célula para texto seguro.
@@ -259,6 +268,10 @@ def to_number_br(v) -> float:
 
 def normalize_header(h: str) -> str:
     h = (h or "").strip().lower()
+    h = "".join(
+        ch for ch in unicodedata.normalize("NFKD", h)
+        if not unicodedata.combining(ch)
+    )
     h = re.sub(r"\s+", " ", h)
     return h
 
@@ -270,12 +283,18 @@ def guess_columns(df: pd.DataFrame) -> Dict[str, str]:
     cols = {c: normalize_header(c) for c in df.columns}
     # candidatos por “intenção”
     def find_any(keys: List[str]) -> Optional[str]:
+        normalized_keys = [normalize_header(k) for k in keys]
+        # Primeiro procura correspondência exata para não confundir, por exemplo,
+        # "Despesas Empenhadas" com outra coluna que apenas contenha esse texto.
         for c, lc in cols.items():
-            for k in keys:
+            if lc in normalized_keys:
+                return c
+        for c, lc in cols.items():
+            for k in normalized_keys:
                 if k in lc:
                     return c
         return None
-    
+
     def find_fonte_col() -> Optional[str]:
       # 1) preferir header exatamente "fonte"
       for c, lc in cols.items():
@@ -291,20 +310,25 @@ def guess_columns(df: pd.DataFrame) -> Dict[str, str]:
       # se tiver mais de uma, devolve a mais curta (normalmente é a coluna "Fonte")
       if candidates:
          return sorted(candidates, key=lambda x: len(str(x)))[0]
-      return None 
+      return None
 
     mapping = {
         "protocolo": find_any(["processo do empenho", "protocolo", "processo", "nº processo"]),
         "fonte": find_fonte_col(),
         "empenho": find_any(["nota de empenho"]),
         "data": find_any(["data da emissão do empenho"]),
-        "valor": find_any(["Saldo à Liquidar"]),
+        "despesas_empenhadas": find_any(["despesas empenhadas", "despesa empenhada"]),
+        "despesas_liquidadas": find_any(["despesas liquidadas", "despesa liquidada"]),
+        "saldo_liquidar": find_any(["saldo à liquidar", "saldo a liquidar"]),
+        "despesas_pagas": find_any(["despesas pagas", "despesa paga"]),
+        "saldo_pagar": find_any(["saldo à pagar", "saldo a pagar"]),
         "cnpj": find_any(["cnpj", "cpf", "código credor", "cod credor"]),
         "credor": find_any(["descrição credor"]),
     }
 
     # fallback por índice (se a planilha vier “crua” tipo export)
-    # indices do seu script: fonte=17, empenho=26, data=27, protocolo=30, cnpj=31, credor=32, valor=37
+    # Índices conhecidos do layout exportado; as novas colunas financeiras são
+    # identificadas prioritariamente pelos respectivos cabeçalhos.
     # Aqui só funciona se o df vier com as mesmas colunas (muito comum no mesmo relatório)
     if any(v is None for v in mapping.values()):
         idx_map = {
@@ -314,7 +338,7 @@ def guess_columns(df: pd.DataFrame) -> Dict[str, str]:
             "protocolo": 30,
             "cnpj": 31,
             "credor": 32,
-            "valor": 39,
+            "saldo_liquidar": 39,
         }
         for k, idx in idx_map.items():
             if mapping.get(k) is None and len(df.columns) > idx:
@@ -323,7 +347,11 @@ def guess_columns(df: pd.DataFrame) -> Dict[str, str]:
     return mapping
 
 def validate_mapping(mapping: Dict[str, str], df: pd.DataFrame) -> Tuple[bool, List[str]]:
-    required = ["protocolo", "fonte", "empenho", "data", "valor"]
+    required = [
+        "protocolo", "fonte", "empenho", "data",
+        "despesas_empenhadas", "despesas_liquidadas", "saldo_liquidar",
+        "despesas_pagas", "saldo_pagar",
+    ]
     missing = [k for k in required if not mapping.get(k) or mapping[k] not in df.columns]
     return (len(missing) == 0, missing)
 
@@ -392,7 +420,10 @@ def build_consolidated(
         fonte = int(to_number_br(r[mapping["fonte"]]))
         emp = str(r[mapping["empenho"]] if mapping["empenho"] in r else "").strip()
         dt = parse_date_any(r[mapping["data"]])
-        valor = float(to_number_br(r[mapping["valor"]]))
+        financial_values = {
+            key: float(to_number_br(r[mapping[key]]))
+            for key, _, _ in FINANCIAL_METRICS
+        }
 
         if mapping.get("credor") and mapping["credor"] in df.columns:
             credor = str(r[mapping["credor"]] or "").upper().strip()
@@ -404,7 +435,7 @@ def build_consolidated(
             if cnpj:
                 grouped[prot]["cnpj"] = clean_digits(cnpj)
 
-        item = {"emp": emp, "data": dt, "valor": valor}
+        item = {"emp": emp, "data": dt, **financial_values}
 
         if fonte == FONT_ESTADUAL:
             grouped[prot]["estadual"].append(item)
@@ -438,32 +469,38 @@ def build_consolidated(
         for i in range(max_est):
             emp = g["estadual"][i]["emp"] if i < len(g["estadual"]) else ""
             dt = g["estadual"][i]["data"] if i < len(g["estadual"]) else None
-            val = g["estadual"][i]["valor"] if i < len(g["estadual"]) else None
             base[f"EST_EMP{i+1}"] = emp
             base[f"EST_DATA{i+1}"] = dt
-            base[f"EST_VAL{i+1}"] = val
+            for key, _, suffix in FINANCIAL_METRICS:
+                base[f"EST_{suffix}{i+1}"] = (
+                    g["estadual"][i][key] if i < len(g["estadual"]) else None
+                )
 
         # federal cols
         for i in range(max_fed):
             emp = g["federal"][i]["emp"] if i < len(g["federal"]) else ""
             dt = g["federal"][i]["data"] if i < len(g["federal"]) else None
-            val = g["federal"][i]["valor"] if i < len(g["federal"]) else None
             base[f"FED_EMP{i+1}"] = emp
             base[f"FED_DATA{i+1}"] = dt
-            base[f"FED_VAL{i+1}"] = val
+            for key, _, suffix in FINANCIAL_METRICS:
+                base[f"FED_{suffix}{i+1}"] = (
+                    g["federal"][i][key] if i < len(g["federal"]) else None
+                )
 
         # totais
-        total_est = sum([x["valor"] for x in g["estadual"]]) if g["estadual"] else 0.0
-        total_fed = sum([x["valor"] for x in g["federal"]]) if g["federal"] else 0.0
-        total_emp = total_est + total_fed
-        base["TOTAL EST"] = total_est
-        base["TOTAL FED"] = total_fed
-        base["TOTAL EMP"] = total_emp
+        for key, _, suffix in FINANCIAL_METRICS:
+            total_est = sum(x[key] for x in g["estadual"])
+            total_fed = sum(x[key] for x in g["federal"])
+            base[f"EST_TOTAL_{suffix}"] = total_est
+            base[f"FED_TOTAL_{suffix}"] = total_fed
+            base[f"GERAL_TOTAL_{suffix}"] = total_est + total_fed
 
         if g["valorContrato"] is not None:
-            base["Saldo"] = float(g["valorContrato"]) - total_emp
+            base["SALDO DO CONTRATO"] = (
+                float(g["valorContrato"]) - base["GERAL_TOTAL_DESP_EMP"]
+            )
         else:
-            base["Saldo"] = None
+            base["SALDO DO CONTRATO"] = None
 
         rows.append(base)
 
@@ -484,15 +521,15 @@ def write_excel_formatted(df_out: pd.DataFrame, max_est: int, max_fed: int) -> b
     header2 = ["", "", "", "", "", ""]
 
     for i in range(max_est):
-        header1 += ["", "", ""]
-        header2 += [f"EMP{i+1}", "DATA", "VALOR"]
+        header1 += [""] * 7
+        header2 += [f"EMP{i+1}", "DATA"] + [label for _, label, _ in FINANCIAL_METRICS]
 
     for i in range(max_fed):
-        header1 += ["", "", ""]
-        header2 += [f"EMP{i+1}", "DATA", "VALOR"]
+        header1 += [""] * 7
+        header2 += [f"EMP{i+1}", "DATA"] + [label for _, label, _ in FINANCIAL_METRICS]
 
-    header1 += ["TOTAL EST", "TOTAL FED", "TOTAL EMP", "Saldo"]
-    header2 += ["", "", "", ""]
+    header1 += [""] * 15 + ["SALDO DO CONTRATO"]
+    header2 += [label for _, label, _ in FINANCIAL_METRICS] * 3 + [""]
 
     ws.append(header1)
     ws.append(header2)
@@ -505,15 +542,22 @@ def write_excel_formatted(df_out: pd.DataFrame, max_est: int, max_fed: int) -> b
 
     if max_est > 0:
         start = 6  # col index 0-based: G = 6? (A=0, F=5, G=6)
-        end = 6 + max_est * 3 - 1
+        end = 6 + max_est * 7 - 1
         ws.merge_cells(f"{col_letter(start)}1:{col_letter(end)}1")
         ws[f"{col_letter(start)}1"].value = "ESTADUAL"
 
     if max_fed > 0:
-        start = 6 + max_est * 3
-        end = start + max_fed * 3 - 1
+        start = 6 + max_est * 7
+        end = start + max_fed * 7 - 1
         ws.merge_cells(f"{col_letter(start)}1:{col_letter(end)}1")
         ws[f"{col_letter(start)}1"].value = "FEDERAL"
+
+    totals_start = 6 + (max_est + max_fed) * 7
+    for offset, title in enumerate(["TOTAL ESTADUAL", "TOTAL FEDERAL", "TOTAL GERAL"]):
+        start = totals_start + offset * 5
+        end = start + 4
+        ws.merge_cells(f"{col_letter(start)}1:{col_letter(end)}1")
+        ws[f"{col_letter(start)}1"].value = title
 
     # write data rows
     for _, r in df_out.iterrows():
@@ -532,18 +576,20 @@ def write_excel_formatted(df_out: pd.DataFrame, max_est: int, max_fed: int) -> b
             row += [
                 r.get(f"EST_EMP{i+1}", ""),
                 r.get(f"EST_DATA{i+1}", None),
-                r.get(f"EST_VAL{i+1}", None),
             ]
+            row += [r.get(f"EST_{suffix}{i+1}", None) for _, _, suffix in FINANCIAL_METRICS]
 
         # federais
         for i in range(max_fed):
             row += [
                 r.get(f"FED_EMP{i+1}", ""),
                 r.get(f"FED_DATA{i+1}", None),
-                r.get(f"FED_VAL{i+1}", None),
             ]
+            row += [r.get(f"FED_{suffix}{i+1}", None) for _, _, suffix in FINANCIAL_METRICS]
 
-        row += [r.get("TOTAL EST", 0.0), r.get("TOTAL FED", 0.0), r.get("TOTAL EMP", 0.0), r.get("Saldo", None)]
+        for prefix in ("EST", "FED", "GERAL"):
+            row += [r.get(f"{prefix}_TOTAL_{suffix}", 0.0) for _, _, suffix in FINANCIAL_METRICS]
+        row += [r.get("SALDO DO CONTRATO", None)]
         ws.append(row)
 
     last_row = ws.max_row
@@ -590,21 +636,21 @@ def write_excel_formatted(df_out: pd.DataFrame, max_est: int, max_fed: int) -> b
     # estadual header block
     if max_est > 0:
         start = 7
-        end = 7 + max_est * 3 - 1
+        end = 7 + max_est * 7 - 1
         for r in (1, 2):
             for c in range(start, end + 1):
                 ws.cell(row=r, column=c).fill = fill_est_header
 
     # federal header block
     if max_fed > 0:
-        start = 7 + max_est * 3
-        end = start + max_fed * 3 - 1
+        start = 7 + max_est * 7
+        end = start + max_fed * 7 - 1
         for r in (1, 2):
             for c in range(start, end + 1):
                 ws.cell(row=r, column=c).fill = fill_fed_header
 
-    # totals header (last 4)
-    tot_start = total_cols - 3
+    # totals header (15 totais financeiros + saldo do contrato)
+    tot_start = total_cols - 15
     tot_end = total_cols
     for r in (1, 2):
         for c in range(tot_start, tot_end + 1):
@@ -623,31 +669,25 @@ def write_excel_formatted(df_out: pd.DataFrame, max_est: int, max_fed: int) -> b
     # Estadual data block
     if max_est > 0:
         start = 7
-        end = 7 + max_est * 3 - 1
+        end = 7 + max_est * 7 - 1
         for r in range(3, last_row + 1):
             for c in range(start, end + 1):
                 ws.cell(row=r, column=c).fill = fill_est_data
 
     # Federal data block
     if max_fed > 0:
-        start = 7 + max_est * 3
-        end = start + max_fed * 3 - 1
+        start = 7 + max_est * 7
+        end = start + max_fed * 7 - 1
         for r in range(3, last_row + 1):
             for c in range(start, end + 1):
                 ws.cell(row=r, column=c).fill = fill_fed_data
 
-    # Totals data (TOTAL EST..TOTAL EMP) roxo + Saldo verde
-    col_total_est = total_cols - 3
-    col_total_fed = total_cols - 2
-    col_total_emp = total_cols - 1
-    col_saldo = total_cols
-
+    # Totais financeiros em roxo + saldo do contrato em verde
     for r in range(3, last_row + 1):
-        ws.cell(row=r, column=col_total_est).fill = fill_tot_data
-        ws.cell(row=r, column=col_total_fed).fill = fill_tot_data
-        ws.cell(row=r, column=col_total_emp).fill = fill_tot_data
-        ws.cell(row=r, column=col_saldo).fill = fill_saldo_data
-   
+        for c in range(total_cols - 15, total_cols):
+            ws.cell(row=r, column=c).fill = fill_tot_data
+        ws.cell(row=r, column=total_cols).fill = fill_saldo_data
+
     # -------------------------
     # formats: texto / money / date
     # -------------------------
@@ -660,34 +700,29 @@ def write_excel_formatted(df_out: pd.DataFrame, max_est: int, max_fed: int) -> b
     for r in range(3, last_row + 1):
         ws.cell(row=r, column=6).number_format = MONEY_FMT
 
-    # Estadual: DATA e VALOR
+    # Estadual: DATA e os cinco valores financeiros
     for i in range(max_est):
-        date_col = 7 + i * 3 + 1   # EMP, DATA, VALOR -> DATA = +1
-        val_col  = 7 + i * 3 + 2   # VALOR = +2
+        date_col = 7 + i * 7 + 1
+        first_value_col = 7 + i * 7 + 2
         for r in range(3, last_row + 1):
             ws.cell(row=r, column=date_col).number_format = DATE_FMT
-            ws.cell(row=r, column=val_col).number_format  = MONEY_FMT
+            for c in range(first_value_col, first_value_col + 5):
+                ws.cell(row=r, column=c).number_format = MONEY_FMT
 
-    # Federal: DATA e VALOR
-    base = 7 + max_est * 3
+    # Federal: DATA e os cinco valores financeiros
+    base = 7 + max_est * 7
     for i in range(max_fed):
-        date_col = base + i * 3 + 1
-        val_col  = base + i * 3 + 2
+        date_col = base + i * 7 + 1
+        first_value_col = base + i * 7 + 2
         for r in range(3, last_row + 1):
             ws.cell(row=r, column=date_col).number_format = DATE_FMT
-            ws.cell(row=r, column=val_col).number_format  = MONEY_FMT
+            for c in range(first_value_col, first_value_col + 5):
+                ws.cell(row=r, column=c).number_format = MONEY_FMT
 
-    # Totais + Saldo (últimas 4 colunas)
-    col_total_est = total_cols - 3
-    col_total_fed = total_cols - 2
-    col_total_emp = total_cols - 1
-    col_saldo     = total_cols
-
+    # Totais financeiros + saldo do contrato (últimas 16 colunas)
     for r in range(3, last_row + 1):
-        ws.cell(row=r, column=col_total_est).number_format = MONEY_FMT
-        ws.cell(row=r, column=col_total_fed).number_format = MONEY_FMT
-        ws.cell(row=r, column=col_total_emp).number_format = MONEY_FMT
-        ws.cell(row=r, column=col_saldo).number_format     = MONEY_FMT
+        for c in range(total_cols - 15, total_cols + 1):
+            ws.cell(row=r, column=c).number_format = MONEY_FMT
 
     # bottom border each data row (default-ish)
     for r in range(3, last_row + 1):
@@ -757,8 +792,8 @@ st.caption("⚠️ Para esse fluxo, use o relatório do SIAFIC do tipo 8323.")
 
 expand = st.expander("Como Funciona?", icon=":material/info:")
 expand.write("""
-O código processa o relatório do SIAFIC e identifica os protocolos fornecidos. 
-Em seguida, realiza o agrupamento por protocolo para encontrar as respectivas 
+O código processa o relatório do SIAFIC e identifica os protocolos fornecidos.
+Em seguida, realiza o agrupamento por protocolo para encontrar as respectivas
 correspondências no documento.
 """)
 
@@ -776,8 +811,16 @@ prot_df = st.data_editor(
     use_container_width=True
 )
 
-st.subheader("Upload: Relatório SIAFIC (XLSX ou CSV)")
-uploaded = st.file_uploader("Selecione o arquivo", type=["xlsx", "xls", "csv"])
+st.subheader("Upload: Relatório SIAFIC — Tipo 8323 (XLSX, XLS ou CSV)")
+st.warning(
+    "Anexe exclusivamente o relatório do SIAFIC **tipo 8323**. "
+    "Outros tipos de relatório não possuem a estrutura de colunas esperada pelo consolidador."
+)
+uploaded = st.file_uploader(
+    "Selecione o relatório SIAFIC tipo 8323",
+    type=["xlsx", "xls", "csv"],
+    help="O arquivo deve ser a exportação do relatório SIAFIC tipo 8323.",
+)
 
 
 if uploaded:
@@ -827,7 +870,18 @@ if uploaded:
         # -------------------------
         submit_clicked = st.button("Consolidar Informações", type="primary")
         if not ok:
-            missing_labels = ", ".join(missing)
+            expected_headers = {
+                "protocolo": "Processo do Empenho/Protocolo",
+                "fonte": "Fonte",
+                "empenho": "Nota de Empenho",
+                "data": "Data da Emissão do Empenho",
+                "despesas_empenhadas": "Despesas Empenhadas",
+                "despesas_liquidadas": "Despesas Liquidadas",
+                "saldo_liquidar": "Saldo à Liquidar",
+                "despesas_pagas": "Despesas Pagas",
+                "saldo_pagar": "Saldo à Pagar",
+            }
+            missing_labels = ", ".join(expected_headers.get(key, key) for key in missing)
             st.warning(f"Mapeamento incompleto no relatório SIAFIC. Colunas não identificadas: {missing_labels}")
 
         if submit_clicked:
@@ -849,10 +903,18 @@ if uploaded:
                 mapping=mapping
             )
 
-            money_cols = ["R$ Contrato", "TOTAL EST", "TOTAL FED", "TOTAL EMP", "Saldo"]
-
-            # adiciona também todas as colunas EST_VALx e FED_VALx existentes
-            money_cols += [c for c in df_out.columns if c.startswith("EST_VAL") or c.startswith("FED_VAL")]
+            money_cols = ["R$ Contrato", "SALDO DO CONTRATO"]
+            for prefix, count in (("EST", max_est), ("FED", max_fed)):
+                for i in range(1, count + 1):
+                    money_cols += [
+                        f"{prefix}_{suffix}{i}"
+                        for _, _, suffix in FINANCIAL_METRICS
+                    ]
+            for prefix in ("EST", "FED", "GERAL"):
+                money_cols += [
+                    f"{prefix}_TOTAL_{suffix}"
+                    for _, _, suffix in FINANCIAL_METRICS
+                ]
 
             for c in money_cols:
                if c in df_out.columns:
